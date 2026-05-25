@@ -6,9 +6,18 @@ type PlacedTileProps = {
   tileId: string
   x: number
   y: number
+  selected: boolean
+  onSelect: (placedId: string) => void
 }
 
-export function PlacedTile({ placedId, tileId, x, y }: PlacedTileProps) {
+export function PlacedTile({
+  placedId,
+  tileId,
+  x,
+  y,
+  selected,
+  onSelect,
+}: PlacedTileProps) {
   const tile = tilesById[tileId]
   if (!tile) return null
 
@@ -24,11 +33,15 @@ export function PlacedTile({ placedId, tileId, x, y }: PlacedTileProps) {
   return (
     <div
       ref={setNodeRef}
-      className="placed-tile"
+      className={`placed-tile ${selected ? 'placed-tile-selected' : ''}`.trim()}
       {...listeners}
       {...attributes}
       aria-label={`Move ${tile.label} tile`}
       title={`Move ${tile.label}`}
+      onClick={(event) => {
+        event.stopPropagation()
+        onSelect(placedId)
+      }}
       style={{
         position: 'absolute',
         left: x * CELL_SIZE_PX,
