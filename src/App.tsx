@@ -158,6 +158,51 @@ function findNearestAvailableCell(
   return null
 }
 
+function getFittedViewForPlaced(
+  canvas: HTMLElement,
+  placedTiles: Placed[],
+): { zoom: number; scrollLeft: number; scrollTop: number } | null {
+  if (placedTiles.length === 0) return null
+
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+
+  for (const item of placedTiles) {
+    const tile = tilesById[item.tileId]
+    if (!tile) continue
+    minX = Math.min(minX, item.x)
+    minY = Math.min(minY, item.y)
+    maxX = Math.max(maxX, item.x + tile.width)
+    maxY = Math.max(maxY, item.y + tile.height)
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null
+
+  const paddingPx = CELL_SIZE_PX * 2
+  const boundsWidth = Math.max(CELL_SIZE_PX, (maxX - minX) * CELL_SIZE_PX)
+  const boundsHeight = Math.max(CELL_SIZE_PX, (maxY - minY) * CELL_SIZE_PX)
+
+  const availableWidth = Math.max(40, canvas.clientWidth - paddingPx * 2)
+  const availableHeight = Math.max(40, canvas.clientHeight - paddingPx * 2)
+  const fitZoom = Math.min(
+    MAX_ZOOM,
+    Math.max(
+      MIN_ZOOM,
+      Math.min(availableWidth / boundsWidth, availableHeight / boundsHeight),
+    ),
+  )
+
+  const centerWorldX = ((minX + maxX) / 2) * CELL_SIZE_PX
+  const centerWorldY = ((minY + maxY) / 2) * CELL_SIZE_PX
+
+  const scrollLeft = Math.max(0, centerWorldX * fitZoom - canvas.clientWidth / 2)
+  const scrollTop = Math.max(0, centerWorldY * fitZoom - canvas.clientHeight / 2)
+
+  return { zoom: fitZoom, scrollLeft, scrollTop }
+}
+
 export default function App() {
   const [placed, setPlaced] = useState<Placed[]>([])
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null)
@@ -436,13 +481,14 @@ export default function App() {
     }
 
     setShareStatus('sharing')
+    const fittedView = getFittedViewForPlaced(canvas, placed)
     const payload: SharePayload = {
       v: 1,
       placed,
-      zoom,
+      zoom: fittedView?.zoom ?? zoom,
       scroll: {
-        left: canvas.scrollLeft,
-        top: canvas.scrollTop,
+        left: fittedView?.scrollLeft ?? canvas.scrollLeft,
+        top: fittedView?.scrollTop ?? canvas.scrollTop,
       },
     }
 
