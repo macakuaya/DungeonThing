@@ -513,7 +513,7 @@ export default function App() {
 
       const shareCardBase = getShareCardBaseUrl()
       if (!shareCardBase) throw new Error('Share URL is not configured')
-      const shareUrl = `${shareCardBase}?id=${shareId}`
+      const shareUrl = `${shareCardBase.replace(/\/$/, '')}/${shareId}`
 
       await navigator.clipboard.writeText(shareUrl)
       setShareStatus('copied')

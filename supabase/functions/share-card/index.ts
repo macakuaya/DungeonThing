@@ -28,8 +28,14 @@ function pageTemplate(params: {
   const imageMeta = params.imageUrl
     ? `
     <meta property="og:image" content="${escapedImage}" />
+    <meta property="og:image:secure_url" content="${escapedImage}" />
+    <meta property="og:image:type" content="image/png" />
     <meta name="twitter:image" content="${escapedImage}" />
   `
+    : ''
+
+  const previewImage = params.imageUrl
+    ? `<img src="${escapedImage}" alt="Dungeon preview" style="display:block;width:100%;max-width:720px;border-radius:12px;border:1px solid #2e303a;" />`
     : ''
 
   return `<!doctype html>
@@ -47,21 +53,24 @@ function pageTemplate(params: {
     <meta name="twitter:card" content="${params.imageUrl ? 'summary_large_image' : 'summary'}" />
     <meta name="twitter:title" content="${escapedTitle}" />
     <meta name="twitter:description" content="${escapedDescription}" />
-    <meta http-equiv="refresh" content="0;url=${escapedDestination}" />
-    <script>
-      window.location.replace(${JSON.stringify(params.destinationUrl)})
-    </script>
   </head>
-  <body style="font-family: system-ui, sans-serif; padding: 16px;">
-    <p>Opening shared dungeon...</p>
-    <p><a href="${escapedDestination}">Continue</a></p>
+  <body style="margin:0;background:#0f1014;color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
+    <main style="max-width:760px;margin:40px auto;padding:16px;">
+      <h1 style="margin:0 0 8px 0;font-size:22px;">DungeonThing Map Share</h1>
+      <p style="margin:0 0 16px 0;color:#9ca3af;">${escapedDescription}</p>
+      ${previewImage}
+      <p style="margin:16px 0 0 0;">
+        <a href="${escapedDestination}" style="display:inline-block;background:#1f2028;color:#e5e7eb;padding:10px 14px;border-radius:8px;text-decoration:none;border:1px solid #4b5563;">Open in DungeonThing</a>
+      </p>
+    </main>
   </body>
 </html>`
 }
 
 Deno.serve(async (request) => {
   const url = new URL(request.url)
-  const id = url.searchParams.get('id')
+  const pathId = url.pathname.split('/').filter(Boolean).pop()
+  const id = pathId && pathId !== 'share-card' ? pathId : url.searchParams.get('id')
   const fallbackDestination = publicAppUrl || 'https://macakuaya.github.io/DungeonThing/'
 
   if (!id || !supabaseUrl || !serviceRole) {
@@ -71,7 +80,7 @@ Deno.serve(async (request) => {
       destinationUrl: fallbackDestination,
     })
     return new Response(html, {
-      headers: { 'content-type': 'text/html; charset=utf-8' },
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
     })
   }
 
@@ -88,7 +97,7 @@ Deno.serve(async (request) => {
       destinationUrl: fallbackDestination,
     })
     return new Response(html, {
-      headers: { 'content-type': 'text/html; charset=utf-8' },
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
     })
   }
 
@@ -103,6 +112,6 @@ Deno.serve(async (request) => {
   })
 
   return new Response(html, {
-    headers: { 'content-type': 'text/html; charset=utf-8' },
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
   })
 })
