@@ -33,6 +33,12 @@ type Placed = { id: string; tileId: string; x: number; y: number }
 type DragSource = 'sidebar' | 'placed'
 type ActiveDrag = { tileId: string; source: DragSource; placedId?: string }
 type DragPreview = { tileId: string; x: number; y: number; valid: boolean }
+type SharePayload = {
+  v: 1
+  placed: Placed[]
+  zoom: number
+  scroll: { left: number; top: number }
+}
 type TrackpadGestureEvent = Event & {
   scale: number
   clientX: number
@@ -42,6 +48,75 @@ type TrackpadGestureEvent = Event & {
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 2
 const ZOOM_STEP = 0.1
+const SHARE_QUERY_KEY = 'map'
+
+function toUrlSafeBase64(input: string) {
+  const bytes = new TextEncoder().encode(input)
+  let binary = ''
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function fromUrlSafeBase64(input: string) {
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4)
+  const binary = atob(padded)
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  return new TextDecoder().decode(bytes)
+}
+
+function isValidPlaced(value: unknown): value is Placed {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Partial<Placed>
+  return (
+    typeof item.id === 'string' &&
+    typeof item.tileId === 'string' &&
+    Number.isInteger(item.x) &&
+    Number.isInteger(item.y)
+  )
+}
+
+function decodeSharePayload(encoded: string): SharePayload | null {
+  try {
+    const decoded = fromUrlSafeBase64(encoded)
+    const parsed = JSON.parse(decoded) as Partial<SharePayload>
+    if (parsed.v !== 1) return null
+    if (!Array.isArray(parsed.placed)) return null
+    if (typeof parsed.zoom !== 'number' || !Number.isFinite(parsed.zoom)) return null
+    if (!parsed.scroll || typeof parsed.scroll !== 'object') return null
+    if (
+      typeof parsed.scroll.left !== 'number' ||
+      typeof parsed.scroll.top !== 'number' ||
+      !Number.isFinite(parsed.scroll.left) ||
+      !Number.isFinite(parsed.scroll.top)
+    ) {
+      return null
+    }
+
+    const filteredPlaced = parsed.placed.filter(
+      (item): item is Placed =>
+        isValidPlaced(item) && Boolean(tilesById[item.tileId]),
+    )
+
+    return {
+      v: 1,
+      placed: filteredPlaced,
+      zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, parsed.zoom)),
+      scroll: {
+        left: Math.max(0, parsed.scroll.left),
+        top: Math.max(0, parsed.scroll.top),
+      },
+    }
+  } catch {
+    return null
+  }
+}
+
+function encodeSharePayload(payload: SharePayload) {
+  return toUrlSafeBase64(JSON.stringify(payload))
+}
 
 function getSnappedGridCell(
   activeRect: ClientRect | null | undefined,
@@ -150,7 +225,13 @@ export default function App() {
   const [selectedPlacedId, setSelectedPlacedId] = useState<string | null>(null)
   const [isPanning, setIsPanning] = useState(false)
   const [zoom, setZoom] = useState(1)
+  const [shareStatus, setShareStatus] = useState<'idle' | 'copied' | 'error'>(
+    'idle',
+  )
   const canvasRef = useRef<HTMLElement | null>(null)
+  const pendingHydratedScrollRef = useRef<{ left: number; top: number } | null>(
+    null,
+  )
   const panRef = useRef<{
     pointerId: number | null
     startX: number
@@ -406,6 +487,31 @@ export default function App() {
     applyZoom(zoom + direction * ZOOM_STEP, event.clientX, event.clientY)
   }
 
+  const handleShare = async () => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const payload: SharePayload = {
+      v: 1,
+      placed,
+      zoom,
+      scroll: {
+        left: canvas.scrollLeft,
+        top: canvas.scrollTop,
+      },
+    }
+
+    const url = new URL(window.location.href)
+    url.searchParams.set(SHARE_QUERY_KEY, encodeSharePayload(payload))
+
+    try {
+      await navigator.clipboard.writeText(url.toString())
+      setShareStatus('copied')
+    } catch {
+      setShareStatus('error')
+    }
+  }
+
   useEffect(() => {
     if (!selectedPlacedId) return
 
@@ -418,6 +524,40 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [selectedPlacedId])
+
+  useEffect(() => {
+    const encoded = new URLSearchParams(window.location.search).get(SHARE_QUERY_KEY)
+    if (!encoded) return
+
+    const payload = decodeSharePayload(encoded)
+    if (!payload) return
+
+    setPlaced(payload.placed)
+    setZoom(payload.zoom)
+    pendingHydratedScrollRef.current = payload.scroll
+  }, [])
+
+  useEffect(() => {
+    if (!pendingHydratedScrollRef.current) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const pending = pendingHydratedScrollRef.current
+    requestAnimationFrame(() => {
+      if (!canvasRef.current) return
+      canvasRef.current.scrollLeft = pending.left
+      canvasRef.current.scrollTop = pending.top
+      pendingHydratedScrollRef.current = null
+    })
+  }, [zoom, placed.length])
+
+  useEffect(() => {
+    if (shareStatus === 'idle') return
+    const timeout = window.setTimeout(() => {
+      setShareStatus('idle')
+    }, 1700)
+    return () => window.clearTimeout(timeout)
+  }, [shareStatus])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -494,7 +634,26 @@ export default function App() {
             >
               +
             </button>
+            <button
+              type="button"
+              className="share-button"
+              onClick={handleShare}
+              title="Copy a link with current map and view"
+              aria-label="Share map"
+            >
+              Share
+            </button>
           </div>
+          {shareStatus === 'copied' && (
+            <div className="share-toast" role="status" aria-live="polite">
+              Copied link
+            </div>
+          )}
+          {shareStatus === 'error' && (
+            <div className="share-toast share-toast-error" role="alert">
+              Copy failed
+            </div>
+          )}
 
           <main
             ref={canvasRef}
