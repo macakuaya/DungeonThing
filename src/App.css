@@ -110,6 +110,11 @@
   padding: 6px 10px;
 }
 
+.share-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .zoom-label {
   min-width: 48px;
   text-align: center;
@@ -139,6 +144,11 @@
   padding: 7px 10px;
   animation: share-toast-fade 1.7s ease;
   pointer-events: none;
+}
+
+.share-toast-static {
+  animation: none;
+  opacity: 1;
 }
 
 .share-toast-error {

@@ -17,6 +17,7 @@ import {
   type DragMoveEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
+import { toBlob } from 'html-to-image'
 import { Grid } from './components/Grid'
 import { Sidebar } from './components/Sidebar'
 import { PlacedTile } from './components/PlacedTile'
@@ -27,95 +28,34 @@ import {
   type TileDef,
   tilesById,
 } from './tiles'
+import {
+  MAX_ZOOM,
+  MIN_ZOOM,
+  SHARE_QUERY_KEY,
+  createShareId,
+  decodeLegacyPayload,
+  getLegacyQueryKey,
+  type Placed,
+  type SharePayload,
+} from './lib/share'
+import {
+  createSharedMap,
+  fetchSharedMap,
+  getShareCardBaseUrl,
+  hasSupabaseConfig,
+  uploadSharePreview,
+} from './lib/supabase'
 import './App.css'
 
-type Placed = { id: string; tileId: string; x: number; y: number }
 type DragSource = 'sidebar' | 'placed'
 type ActiveDrag = { tileId: string; source: DragSource; placedId?: string }
 type DragPreview = { tileId: string; x: number; y: number; valid: boolean }
-type SharePayload = {
-  v: 1
-  placed: Placed[]
-  zoom: number
-  scroll: { left: number; top: number }
-}
+const ZOOM_STEP = 0.1
 type TrackpadGestureEvent = Event & {
   scale: number
   clientX: number
   clientY: number
   preventDefault: () => void
-}
-const MIN_ZOOM = 0.5
-const MAX_ZOOM = 2
-const ZOOM_STEP = 0.1
-const SHARE_QUERY_KEY = 'map'
-
-function toUrlSafeBase64(input: string) {
-  const bytes = new TextEncoder().encode(input)
-  let binary = ''
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte)
-  })
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
-}
-
-function fromUrlSafeBase64(input: string) {
-  const normalized = input.replace(/-/g, '+').replace(/_/g, '/')
-  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4)
-  const binary = atob(padded)
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
-  return new TextDecoder().decode(bytes)
-}
-
-function isValidPlaced(value: unknown): value is Placed {
-  if (!value || typeof value !== 'object') return false
-  const item = value as Partial<Placed>
-  return (
-    typeof item.id === 'string' &&
-    typeof item.tileId === 'string' &&
-    Number.isInteger(item.x) &&
-    Number.isInteger(item.y)
-  )
-}
-
-function decodeSharePayload(encoded: string): SharePayload | null {
-  try {
-    const decoded = fromUrlSafeBase64(encoded)
-    const parsed = JSON.parse(decoded) as Partial<SharePayload>
-    if (parsed.v !== 1) return null
-    if (!Array.isArray(parsed.placed)) return null
-    if (typeof parsed.zoom !== 'number' || !Number.isFinite(parsed.zoom)) return null
-    if (!parsed.scroll || typeof parsed.scroll !== 'object') return null
-    if (
-      typeof parsed.scroll.left !== 'number' ||
-      typeof parsed.scroll.top !== 'number' ||
-      !Number.isFinite(parsed.scroll.left) ||
-      !Number.isFinite(parsed.scroll.top)
-    ) {
-      return null
-    }
-
-    const filteredPlaced = parsed.placed.filter(
-      (item): item is Placed =>
-        isValidPlaced(item) && Boolean(tilesById[item.tileId]),
-    )
-
-    return {
-      v: 1,
-      placed: filteredPlaced,
-      zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, parsed.zoom)),
-      scroll: {
-        left: Math.max(0, parsed.scroll.left),
-        top: Math.max(0, parsed.scroll.top),
-      },
-    }
-  } catch {
-    return null
-  }
-}
-
-function encodeSharePayload(payload: SharePayload) {
-  return toUrlSafeBase64(JSON.stringify(payload))
 }
 
 function getSnappedGridCell(
@@ -225,9 +165,9 @@ export default function App() {
   const [selectedPlacedId, setSelectedPlacedId] = useState<string | null>(null)
   const [isPanning, setIsPanning] = useState(false)
   const [zoom, setZoom] = useState(1)
-  const [shareStatus, setShareStatus] = useState<'idle' | 'copied' | 'error'>(
-    'idle',
-  )
+  const [shareStatus, setShareStatus] = useState<
+    'idle' | 'sharing' | 'copied' | 'error' | 'setup'
+  >('idle')
   const canvasRef = useRef<HTMLElement | null>(null)
   const pendingHydratedScrollRef = useRef<{ left: number; top: number } | null>(
     null,
@@ -490,7 +430,12 @@ export default function App() {
   const handleShare = async () => {
     const canvas = canvasRef.current
     if (!canvas) return
+    if (!hasSupabaseConfig) {
+      setShareStatus('setup')
+      return
+    }
 
+    setShareStatus('sharing')
     const payload: SharePayload = {
       v: 1,
       placed,
@@ -501,11 +446,30 @@ export default function App() {
       },
     }
 
-    const url = new URL(window.location.href)
-    url.searchParams.set(SHARE_QUERY_KEY, encodeSharePayload(payload))
-
     try {
-      await navigator.clipboard.writeText(url.toString())
+      const shareId = createShareId()
+      const previewBlob =
+        (await toBlob(canvas, {
+          cacheBust: true,
+          pixelRatio: 1,
+        })) ?? undefined
+      if (!previewBlob) {
+        throw new Error('Could not generate preview image')
+      }
+
+      const previewPath = `${shareId}.png`
+      await uploadSharePreview(previewPath, previewBlob)
+      await createSharedMap({
+        id: shareId,
+        payload,
+        preview_path: previewPath,
+      })
+
+      const shareCardBase = getShareCardBaseUrl()
+      if (!shareCardBase) throw new Error('Share URL is not configured')
+      const shareUrl = `${shareCardBase}?id=${shareId}`
+
+      await navigator.clipboard.writeText(shareUrl)
       setShareStatus('copied')
     } catch {
       setShareStatus('error')
@@ -526,15 +490,38 @@ export default function App() {
   }, [selectedPlacedId])
 
   useEffect(() => {
-    const encoded = new URLSearchParams(window.location.search).get(SHARE_QUERY_KEY)
-    if (!encoded) return
+    const search = new URLSearchParams(window.location.search)
+    const shareId = search.get(SHARE_QUERY_KEY)
+    const legacyEncoded = search.get(getLegacyQueryKey())
+    const validTileIds = new Set(Object.keys(tilesById))
 
-    const payload = decodeSharePayload(encoded)
-    if (!payload) return
+    if (legacyEncoded) {
+      const legacyPayload = decodeLegacyPayload(legacyEncoded, validTileIds)
+      if (legacyPayload) {
+        setPlaced(legacyPayload.placed)
+        setZoom(legacyPayload.zoom)
+        pendingHydratedScrollRef.current = legacyPayload.scroll
+      }
+    }
 
-    setPlaced(payload.placed)
-    setZoom(payload.zoom)
-    pendingHydratedScrollRef.current = payload.scroll
+    if (!shareId || !hasSupabaseConfig) return
+
+    fetchSharedMap(shareId)
+      .then((payload) => {
+        if (!payload) return
+        const filteredPlaced = payload.placed.filter((tile) =>
+          validTileIds.has(tile.tileId),
+        )
+        setPlaced(filteredPlaced)
+        setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, payload.zoom)))
+        pendingHydratedScrollRef.current = {
+          left: Math.max(0, payload.scroll.left),
+          top: Math.max(0, payload.scroll.top),
+        }
+      })
+      .catch(() => {
+        // If the shared id is missing/invalid we keep the current map empty.
+      })
   }, [])
 
   useEffect(() => {
@@ -552,7 +539,7 @@ export default function App() {
   }, [zoom, placed.length])
 
   useEffect(() => {
-    if (shareStatus === 'idle') return
+    if (!['copied', 'error', 'setup'].includes(shareStatus)) return
     const timeout = window.setTimeout(() => {
       setShareStatus('idle')
     }, 1700)
@@ -640,10 +627,20 @@ export default function App() {
               onClick={handleShare}
               title="Copy a link with current map and view"
               aria-label="Share map"
+              disabled={shareStatus === 'sharing'}
             >
-              Share
+              {shareStatus === 'sharing' ? 'Sharing...' : 'Share'}
             </button>
           </div>
+          {shareStatus === 'sharing' && (
+            <div
+              className="share-toast share-toast-static"
+              role="status"
+              aria-live="polite"
+            >
+              Creating link...
+            </div>
+          )}
           {shareStatus === 'copied' && (
             <div className="share-toast" role="status" aria-live="polite">
               Copied link
@@ -652,6 +649,11 @@ export default function App() {
           {shareStatus === 'error' && (
             <div className="share-toast share-toast-error" role="alert">
               Copy failed
+            </div>
+          )}
+          {shareStatus === 'setup' && (
+            <div className="share-toast share-toast-error" role="alert">
+              Add Supabase env vars first
             </div>
           )}
 
