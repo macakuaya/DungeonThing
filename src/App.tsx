@@ -17,7 +17,7 @@ import {
   type DragMoveEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
-import { Grid, GRID_DROPPABLE_ID } from './components/Grid'
+import { Grid } from './components/Grid'
 import { Sidebar } from './components/Sidebar'
 import { PlacedTile } from './components/PlacedTile'
 import {
@@ -33,26 +33,43 @@ type Placed = { id: string; tileId: string; x: number; y: number }
 type DragSource = 'sidebar' | 'placed'
 type ActiveDrag = { tileId: string; source: DragSource; placedId?: string }
 type DragPreview = { tileId: string; x: number; y: number; valid: boolean }
+type TrackpadGestureEvent = Event & {
+  scale: number
+  clientX: number
+  clientY: number
+  preventDefault: () => void
+}
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 2
 const ZOOM_STEP = 0.1
 
 function getSnappedGridCell(
   activeRect: ClientRect | null | undefined,
-  gridRect: ClientRect,
+  canvasRect: DOMRect,
+  scrollLeft: number,
+  scrollTop: number,
   tile: TileDef,
   zoom: number,
+  maxCols: number,
+  maxRows: number,
 ): { x: number; y: number } | null {
   if (!activeRect) return null
 
-  const offsetX = activeRect.left - gridRect.left
-  const offsetY = activeRect.top - gridRect.top
+  const isInsideCanvas =
+    activeRect.right >= canvasRect.left &&
+    activeRect.left <= canvasRect.right &&
+    activeRect.bottom >= canvasRect.top &&
+    activeRect.top <= canvasRect.bottom
+  if (!isInsideCanvas) return null
+
+  const offsetX = activeRect.left - canvasRect.left + scrollLeft
+  const offsetY = activeRect.top - canvasRect.top + scrollTop
 
   let cellX = Math.round(offsetX / (CELL_SIZE_PX * zoom))
   let cellY = Math.round(offsetY / (CELL_SIZE_PX * zoom))
 
-  cellX = Math.max(0, Math.min(GRID_COLS - tile.width, cellX))
-  cellY = Math.max(0, Math.min(GRID_ROWS - tile.height, cellY))
+  cellX = Math.max(0, Math.min(maxCols - tile.width, cellX))
+  cellY = Math.max(0, Math.min(maxRows - tile.height, cellY))
 
   return { x: cellX, y: cellY }
 }
@@ -92,6 +109,40 @@ function canPlaceAt(
   })
 }
 
+function findNearestAvailableCell(
+  startX: number,
+  startY: number,
+  placedTiles: Placed[],
+  tile: TileDef,
+  maxCols: number,
+  maxRows: number,
+  ignorePlacedId?: string,
+) {
+  const maxRadius = Math.max(maxCols, maxRows)
+
+  for (let radius = 0; radius <= maxRadius; radius += 1) {
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        if (radius > 0 && Math.abs(dx) !== radius && Math.abs(dy) !== radius) {
+          continue
+        }
+
+        const x = startX + dx
+        const y = startY + dy
+        if (x < 0 || y < 0 || x > maxCols - tile.width || y > maxRows - tile.height) {
+          continue
+        }
+
+        if (canPlaceAt(placedTiles, tile, x, y, ignorePlacedId)) {
+          return { x, y }
+        }
+      }
+    }
+  }
+
+  return null
+}
+
 export default function App() {
   const [placed, setPlaced] = useState<Placed[]>([])
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null)
@@ -113,6 +164,23 @@ export default function App() {
     startScrollLeft: 0,
     startScrollTop: 0,
   })
+  const gestureLastScaleRef = useRef(1)
+  const viewportCols =
+    Math.ceil((canvasRef.current?.clientWidth ?? 0) / (CELL_SIZE_PX * zoom)) + 2
+  const viewportRows =
+    Math.ceil((canvasRef.current?.clientHeight ?? 0) / (CELL_SIZE_PX * zoom)) + 2
+  const maxPlacedCol = placed.reduce((maxCol, item) => {
+    const tile = tilesById[item.tileId]
+    if (!tile) return maxCol
+    return Math.max(maxCol, item.x + tile.width)
+  }, 0)
+  const maxPlacedRow = placed.reduce((maxRow, item) => {
+    const tile = tilesById[item.tileId]
+    if (!tile) return maxRow
+    return Math.max(maxRow, item.y + tile.height)
+  }, 0)
+  const contentCols = Math.max(GRID_COLS, viewportCols, maxPlacedCol + 2)
+  const contentRows = Math.max(GRID_ROWS, viewportRows, maxPlacedRow + 2)
 
   // Require a small drag distance so a click on the tile button doesn't
   // immediately try to start a drag-and-place gesture.
@@ -149,10 +217,11 @@ export default function App() {
     tileId: string,
     source: DragSource,
     placedId: string | undefined,
-    over: DragMoveEvent['over'] | DragEndEvent['over'],
+    _over: DragMoveEvent['over'] | DragEndEvent['over'],
     translatedRect: ClientRect | null | undefined,
   ) => {
-    if (!over || over.id !== GRID_DROPPABLE_ID) {
+    const canvas = canvasRef.current
+    if (!canvas) {
       setDragPreview(null)
       return null
     }
@@ -163,7 +232,16 @@ export default function App() {
       return null
     }
 
-    const snapped = getSnappedGridCell(translatedRect, over.rect, tile, zoom)
+    const snapped = getSnappedGridCell(
+      translatedRect,
+      canvas.getBoundingClientRect(),
+      canvas.scrollLeft,
+      canvas.scrollTop,
+      tile,
+      zoom,
+      contentCols,
+      contentRows,
+    )
     if (!snapped) {
       setDragPreview(null)
       return null
@@ -238,25 +316,41 @@ export default function App() {
         over,
         active.rect.current.translated,
       )
-    if (preview && preview.valid) {
-      if (activeDrag?.source === 'placed' && activeDrag.placedId) {
-        setPlaced((prev) =>
-          prev.map((item) =>
-            item.id === activeDrag.placedId
-              ? { ...item, x: preview.x, y: preview.y }
-              : item,
-          ),
-        )
-      } else {
-        setPlaced((prev) => [
-          ...prev,
-          {
-            id: `${tileId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            tileId,
-            x: preview.x,
-            y: preview.y,
-          },
-        ])
+    if (preview) {
+      const ignorePlacedId =
+        activeDrag?.source === 'placed' ? activeDrag.placedId : undefined
+      const resolvedCell = preview.valid
+        ? { x: preview.x, y: preview.y }
+        : findNearestAvailableCell(
+            preview.x,
+            preview.y,
+            placed,
+            tile,
+            contentCols,
+            contentRows,
+            ignorePlacedId,
+          )
+
+      if (resolvedCell) {
+        if (activeDrag?.source === 'placed' && activeDrag.placedId) {
+          setPlaced((prev) =>
+            prev.map((item) =>
+              item.id === activeDrag.placedId
+                ? { ...item, x: resolvedCell.x, y: resolvedCell.y }
+                : item,
+            ),
+          )
+        } else {
+          setPlaced((prev) => [
+            ...prev,
+            {
+              id: `${tileId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              tileId,
+              x: resolvedCell.x,
+              y: resolvedCell.y,
+            },
+          ])
+        }
       }
     }
 
@@ -325,8 +419,41 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [selectedPlacedId])
 
-  const gridPixelWidth = GRID_COLS * CELL_SIZE_PX
-  const gridPixelHeight = GRID_ROWS * CELL_SIZE_PX
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    // Safari/trackpad pinch gestures fire these non-standard events.
+    // We map gesture scale to the same zoom pipeline used by wheel/buttons.
+    const onGestureStart = (event: Event) => {
+      const gesture = event as TrackpadGestureEvent
+      gesture.preventDefault()
+      gestureLastScaleRef.current = 1
+    }
+
+    const onGestureChange = (event: Event) => {
+      const gesture = event as TrackpadGestureEvent
+      gesture.preventDefault()
+
+      const prevScale = gestureLastScaleRef.current
+      if (!prevScale || !Number.isFinite(gesture.scale)) return
+
+      const stepScale = gesture.scale / prevScale
+      gestureLastScaleRef.current = gesture.scale
+      applyZoom(zoom * stepScale, gesture.clientX, gesture.clientY)
+    }
+
+    canvas.addEventListener('gesturestart', onGestureStart, { passive: false })
+    canvas.addEventListener('gesturechange', onGestureChange, { passive: false })
+
+    return () => {
+      canvas.removeEventListener('gesturestart', onGestureStart)
+      canvas.removeEventListener('gesturechange', onGestureChange)
+    }
+  }, [zoom])
+
+  const gridPixelWidth = contentCols * CELL_SIZE_PX
+  const gridPixelHeight = contentRows * CELL_SIZE_PX
 
   return (
     <DndContext
@@ -338,15 +465,7 @@ export default function App() {
     >
       <div className="app">
         <Sidebar />
-        <main
-          ref={canvasRef}
-          className={`canvas ${isPanning ? 'canvas-panning' : ''}`.trim()}
-          onPointerDown={handleCanvasPointerDown}
-          onPointerMove={handleCanvasPointerMove}
-          onPointerUp={endPan}
-          onPointerCancel={endPan}
-          onWheel={handleCanvasWheel}
-        >
+        <section className="canvas-shell">
           <div className="zoom-controls">
             <button
               type="button"
@@ -357,7 +476,15 @@ export default function App() {
             >
               -
             </button>
-            <span className="zoom-label">{Math.round(zoom * 100)}%</span>
+            <button
+              type="button"
+              className="zoom-reset"
+              onClick={() => applyZoom(1)}
+              title="Reset zoom to 100%"
+              aria-label="Reset zoom to 100%"
+            >
+              <span className="zoom-label">{Math.round(zoom * 100)}%</span>
+            </button>
             <button
               type="button"
               className="zoom-button"
@@ -369,58 +496,72 @@ export default function App() {
             </button>
           </div>
 
-          <div
-            className="grid-stage"
-            style={{ width: gridPixelWidth * zoom, height: gridPixelHeight * zoom }}
+          <main
+            ref={canvasRef}
+            className={`canvas ${isPanning ? 'canvas-panning' : ''}`.trim()}
+            style={{
+              backgroundSize: `${CELL_SIZE_PX * zoom}px ${CELL_SIZE_PX * zoom}px`,
+              backgroundPosition: '-1px 0, 0 0',
+            }}
+            onPointerDown={handleCanvasPointerDown}
+            onPointerMove={handleCanvasPointerMove}
+            onPointerUp={endPan}
+            onPointerCancel={endPan}
+            onWheel={handleCanvasWheel}
           >
             <div
-              className="grid-scale-layer"
-              style={{
-                width: gridPixelWidth,
-                height: gridPixelHeight,
-                transform: `scale(${zoom})`,
-                transformOrigin: 'top left',
-              }}
+              className="grid-stage"
+              style={{ width: gridPixelWidth * zoom, height: gridPixelHeight * zoom }}
             >
-              <Grid
-                onPointerDown={(event) => {
-                  if ((event.target as HTMLElement).classList.contains('grid-canvas')) {
-                    setSelectedPlacedId(null)
-                  }
+              <div
+                className="grid-scale-layer"
+                style={{
+                  width: gridPixelWidth,
+                  height: gridPixelHeight,
+                  transform: `scale(${zoom})`,
+                  transformOrigin: 'top left',
                 }}
               >
-                {dragPreview && (() => {
-                  const tile = tilesById[dragPreview.tileId]
-                  if (!tile) return null
-                  return (
-                    <div
-                      className={`landing-preview ${dragPreview.valid ? '' : 'landing-preview-blocked'}`.trim()}
-                      style={{
-                        position: 'absolute',
-                        left: dragPreview.x * CELL_SIZE_PX,
-                        top: dragPreview.y * CELL_SIZE_PX,
-                        width: tile.width * CELL_SIZE_PX,
-                        height: tile.height * CELL_SIZE_PX,
-                        background: tile.color,
-                      }}
+                <Grid
+                  onPointerDown={(event) => {
+                    if ((event.target as HTMLElement).classList.contains('grid-canvas')) {
+                      setSelectedPlacedId(null)
+                    }
+                  }}
+                >
+                  {dragPreview && (() => {
+                    const tile = tilesById[dragPreview.tileId]
+                    if (!tile) return null
+                    return (
+                      <div
+                        className={`landing-preview ${dragPreview.valid ? '' : 'landing-preview-blocked'}`.trim()}
+                        style={{
+                          position: 'absolute',
+                          left: dragPreview.x * CELL_SIZE_PX,
+                          top: dragPreview.y * CELL_SIZE_PX,
+                          width: tile.width * CELL_SIZE_PX,
+                          height: tile.height * CELL_SIZE_PX,
+                          background: tile.color,
+                        }}
+                      />
+                    )
+                  })()}
+                  {placed.map((p) => (
+                    <PlacedTile
+                      key={p.id}
+                      placedId={p.id}
+                      tileId={p.tileId}
+                      x={p.x}
+                      y={p.y}
+                      selected={selectedPlacedId === p.id}
+                      onSelect={setSelectedPlacedId}
                     />
-                  )
-                })()}
-                {placed.map((p) => (
-                  <PlacedTile
-                    key={p.id}
-                    placedId={p.id}
-                    tileId={p.tileId}
-                    x={p.x}
-                    y={p.y}
-                    selected={selectedPlacedId === p.id}
-                    onSelect={setSelectedPlacedId}
-                  />
-                ))}
-              </Grid>
+                  ))}
+                </Grid>
+              </div>
             </div>
-          </div>
-        </main>
+          </main>
+        </section>
       </div>
       <DragOverlay dropAnimation={null}>
         {activeDrag && (() => {

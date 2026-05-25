@@ -49,7 +49,7 @@ export function PlacedTile({
         width: tile.width * CELL_SIZE_PX,
         height: tile.height * CELL_SIZE_PX,
         background: tile.color,
-        opacity: isDragging ? 0.35 : 0.85,
+        opacity: isDragging ? 0.3 : 0.62,
         border: '1px solid rgba(0,0,0,0.4)',
         cursor: 'grab',
         touchAction: 'none',
