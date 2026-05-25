@@ -46,13 +46,14 @@ You can watch the deploy run under the **Actions** tab on GitHub.
 
 ---
 
-## Short share links + social previews (Supabase)
+## Short share links + social previews (Supabase + Cloudflare Worker)
 
-The Share button now creates a short link by saving map state in Supabase and copying a URL like:
+The Share button saves map state in Supabase and copies a short social link.  
+Recommended final shape:
 
-`https://<your-project>.supabase.co/functions/v1/share-card?id=abc12345`
+`https://<your-worker-subdomain>.workers.dev/s/abc12345`
 
-That URL has Open Graph/Twitter meta tags, so Discord/WhatsApp/X can show a preview card with image.
+That link serves Open Graph/Twitter metadata, so Discord/WhatsApp/X can show a proper preview image card.
 
 ### 1) Create a Supabase project
 
@@ -69,29 +70,39 @@ This creates:
 - `share-previews` public storage bucket for preview images
 - policies for public read/create access
 
-### 3) Deploy the Edge Function
+### 3) Deploy the Cloudflare Worker (share card endpoint)
 
-Install Supabase CLI if needed:
+Install Cloudflare Wrangler CLI (already in this repo as `npm` script):
 
 ```bash
-brew install supabase/tap/supabase
+npm install
 ```
 
 Then from the project root:
 
 ```bash
-supabase login
-supabase link --project-ref <your-project-ref>
-supabase functions deploy share-card --no-verify-jwt
+wrangler login
 ```
 
-Set function secret for app redirect URL:
+Set Worker secrets:
 
 ```bash
-supabase secrets set PUBLIC_APP_URL=https://macakuaya.github.io/DungeonThing/
+wrangler secret put SUPABASE_URL
+wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+wrangler secret put PUBLIC_APP_URL
 ```
 
-### 4) Configure local env vars
+For `PUBLIC_APP_URL`, use:
+
+`https://macakuaya.github.io/DungeonThing/`
+
+Deploy:
+
+```bash
+npm run cf:deploy
+```
+
+### 4) Configure local env vars (frontend)
 
 Copy `.env.example` to `.env` and fill:
 
@@ -101,7 +112,7 @@ cp .env.example .env
 
 - `VITE_SUPABASE_URL` = your project URL (e.g. `https://xxxx.supabase.co`)
 - `VITE_SUPABASE_ANON_KEY` = anon public key
-- `VITE_SHARE_CARD_URL` = `https://<project-ref>.supabase.co/functions/v1/share-card`
+- `VITE_SHARE_CARD_URL` = `https://<your-worker-subdomain>.workers.dev/s`
 - `VITE_PUBLIC_APP_URL` = `https://macakuaya.github.io/DungeonThing/`
 
 Restart `npm run dev` after editing `.env`.
@@ -112,10 +123,15 @@ In GitHub repo settings (**Settings → Secrets and variables → Actions**), ad
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
-- `VITE_SHARE_CARD_URL`
+- `VITE_SHARE_CARD_URL` (point this to your Worker `/s` base URL)
 - `VITE_PUBLIC_APP_URL`
 
 The deploy workflow already reads these secrets during build.
+
+### 6) Optional fallback
+
+If you do not configure Cloudflare yet, you can still use the Supabase function share URL.  
+Cloudflare is recommended for better social-link behavior consistency.
 
 ---
 

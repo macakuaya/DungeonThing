@@ -1,0 +1,6 @@
+name = "dungeonthing-share"
+main = "workers/share-card-worker.ts"
+compatibility_date = "2026-05-25"
+
+[observability]
+enabled = true
