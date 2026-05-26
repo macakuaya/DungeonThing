@@ -48,10 +48,22 @@ jobs:
           node -e "fetch('http://127.0.0.1:7933/ingest/b221d707-f9b4-420b-a614-5a214cad947c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9f999'},body:JSON.stringify({sessionId:'e9f999',runId:process.env.GITHUB_RUN_ID,hypothesisId:'H5',location:'.github/workflows/deploy.yml:deploy',message:'Workflow reached gh-pages publish boundary',data:{publishBranch:'gh-pages',publishDir:'dist'},timestamp:Date.now()})}).catch(()=>{})"
       # #endregion
 
-      - name: Publish to gh-pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
-          publish_branch: gh-pages
-          force_orphan: true
+      - name: Publish to gh-pages branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          rm -rf .deploy-pages
+          mkdir -p .deploy-pages
+          cp -R dist/. .deploy-pages/
+          cd .deploy-pages
+          touch .nojekyll
+
+          git init
+          git checkout -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "deploy: ${GITHUB_SHA}"
+
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin gh-pages
