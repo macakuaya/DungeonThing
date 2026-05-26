@@ -32,20 +32,29 @@
   border-radius: 4px;
   padding: 0;
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(255, 255, 255, 0.92);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
+  overflow: hidden;
   user-select: none;
   touch-action: none;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  background: #111827;
 }
 
 .tile-label {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  text-align: center;
+  line-height: 1.2;
+}
+
+.draggable-tile-sprite {
+  margin-bottom: 18px;
 }
 
 .canvas {
@@ -210,7 +219,67 @@
 .drag-overlay-tile {
   border: 2px solid rgba(255, 255, 255, 0.7);
   border-radius: 4px;
-  opacity: 0.7;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
   pointer-events: none;
+}
+
+.tile-sprite {
+  display: grid;
+}
+
+.tile-cell {
+  box-sizing: border-box;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+}
+
+.tile-cell-void {
+  background: transparent;
+  border-color: transparent;
+}
+
+.tile-cell-wall {
+  background: #334155;
+}
+
+.tile-cell-floor {
+  background: #6b7280;
+}
+
+.tile-cell-door {
+  background:
+    repeating-linear-gradient(
+      90deg,
+      #d97706 0 3px,
+      #92400e 3px 6px
+    );
+}
+
+.tile-cell-pillar {
+  background: radial-gradient(circle, #f1f5f9 30%, #64748b 34%, #334155 100%);
+}
+
+.tile-cell-altar {
+  background: radial-gradient(circle, #facc15 20%, #b45309 60%, #422006 100%);
+}
+
+.tile-cell-pit {
+  background: radial-gradient(circle, #111827 20%, #020617 90%);
+}
+
+.tile-cell-stairs {
+  background:
+    repeating-linear-gradient(
+      0deg,
+      #94a3b8 0 4px,
+      #64748b 4px 8px
+    );
+}
+
+.tile-cell-bridge {
+  background:
+    repeating-linear-gradient(
+      90deg,
+      #a16207 0 4px,
+      #854d0e 4px 8px
+    );
 }

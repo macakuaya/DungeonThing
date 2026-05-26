@@ -21,10 +21,14 @@ import { toBlob } from 'html-to-image'
 import { Grid } from './components/Grid'
 import { Sidebar } from './components/Sidebar'
 import { PlacedTile } from './components/PlacedTile'
+import { TileSprite } from './components/TileSprite'
 import {
   CELL_SIZE_PX,
   GRID_COLS,
   GRID_ROWS,
+  getTileShape,
+  normalizeRotation,
+  type TileCell,
   type TileDef,
   tilesById,
 } from './tiles'
@@ -48,8 +52,19 @@ import {
 import './App.css'
 
 type DragSource = 'sidebar' | 'placed'
-type ActiveDrag = { tileId: string; source: DragSource; placedId?: string }
-type DragPreview = { tileId: string; x: number; y: number; valid: boolean }
+type ActiveDrag = {
+  tileId: string
+  rotation: number
+  source: DragSource
+  placedId?: string
+}
+type DragPreview = {
+  tileId: string
+  rotation: number
+  x: number
+  y: number
+  valid: boolean
+}
 const ZOOM_STEP = 0.1
 type TrackpadGestureEvent = Event & {
   scale: number
@@ -63,7 +78,8 @@ function getSnappedGridCell(
   canvasRect: DOMRect,
   scrollLeft: number,
   scrollTop: number,
-  tile: TileDef,
+  tileWidth: number,
+  tileHeight: number,
   zoom: number,
   maxCols: number,
   maxRows: number,
@@ -83,8 +99,8 @@ function getSnappedGridCell(
   let cellX = Math.round(offsetX / (CELL_SIZE_PX * zoom))
   let cellY = Math.round(offsetY / (CELL_SIZE_PX * zoom))
 
-  cellX = Math.max(0, Math.min(maxCols - tile.width, cellX))
-  cellY = Math.max(0, Math.min(maxRows - tile.height, cellY))
+  cellX = Math.max(0, Math.min(maxCols - tileWidth, cellX))
+  cellY = Math.max(0, Math.min(maxRows - tileHeight, cellY))
 
   return { x: cellX, y: cellY }
 }
@@ -101,25 +117,67 @@ function tilesOverlap(
   )
 }
 
+function isOccupiedCell(cell: TileCell) {
+  return cell !== 'void'
+}
+
+function getOccupiedCells(cells: TileCell[][], atX: number, atY: number) {
+  const occupied: string[] = []
+  for (let y = 0; y < cells.length; y += 1) {
+    for (let x = 0; x < (cells[y]?.length ?? 0); x += 1) {
+      if (!isOccupiedCell(cells[y][x])) continue
+      occupied.push(`${atX + x},${atY + y}`)
+    }
+  }
+  return occupied
+}
+
+function tilesOverlapByShape(
+  aShape: { width: number; height: number; cells: TileCell[][] },
+  aX: number,
+  aY: number,
+  bShape: { width: number; height: number; cells: TileCell[][] },
+  bX: number,
+  bY: number,
+) {
+  // Fast-reject via bounding rectangles first.
+  if (
+    !tilesOverlap(
+      { x: aX, y: aY, width: aShape.width, height: aShape.height },
+      { x: bX, y: bY, width: bShape.width, height: bShape.height },
+    )
+  ) {
+    return false
+  }
+
+  const occupiedB = new Set(getOccupiedCells(bShape.cells, bX, bY))
+  for (const cell of getOccupiedCells(aShape.cells, aX, aY)) {
+    if (occupiedB.has(cell)) return true
+  }
+  return false
+}
+
 function canPlaceAt(
   placedTiles: Placed[],
   tile: TileDef,
+  rotation: number,
   x: number,
   y: number,
   ignorePlacedId?: string,
 ) {
+  const shape = getTileShape(tile, rotation)
   return !placedTiles.some((existing) => {
     if (ignorePlacedId && existing.id === ignorePlacedId) return false
     const existingTile = tilesById[existing.tileId]
     if (!existingTile) return false
-    return tilesOverlap(
-      { x, y, width: tile.width, height: tile.height },
-      {
-        x: existing.x,
-        y: existing.y,
-        width: existingTile.width,
-        height: existingTile.height,
-      },
+    const existingShape = getTileShape(existingTile, existing.rotation ?? 0)
+    return tilesOverlapByShape(
+      shape,
+      x,
+      y,
+      existingShape,
+      existing.x,
+      existing.y,
     )
   })
 }
@@ -129,10 +187,12 @@ function findNearestAvailableCell(
   startY: number,
   placedTiles: Placed[],
   tile: TileDef,
+  rotation: number,
   maxCols: number,
   maxRows: number,
   ignorePlacedId?: string,
 ) {
+  const shape = getTileShape(tile, rotation)
   const maxRadius = Math.max(maxCols, maxRows)
 
   for (let radius = 0; radius <= maxRadius; radius += 1) {
@@ -144,11 +204,16 @@ function findNearestAvailableCell(
 
         const x = startX + dx
         const y = startY + dy
-        if (x < 0 || y < 0 || x > maxCols - tile.width || y > maxRows - tile.height) {
+        if (
+          x < 0 ||
+          y < 0 ||
+          x > maxCols - shape.width ||
+          y > maxRows - shape.height
+        ) {
           continue
         }
 
-        if (canPlaceAt(placedTiles, tile, x, y, ignorePlacedId)) {
+        if (canPlaceAt(placedTiles, tile, rotation, x, y, ignorePlacedId)) {
           return { x, y }
         }
       }
@@ -172,10 +237,18 @@ function getFittedViewForPlaced(
   for (const item of placedTiles) {
     const tile = tilesById[item.tileId]
     if (!tile) continue
-    minX = Math.min(minX, item.x)
-    minY = Math.min(minY, item.y)
-    maxX = Math.max(maxX, item.x + tile.width)
-    maxY = Math.max(maxY, item.y + tile.height)
+    const shape = getTileShape(tile, item.rotation ?? 0)
+    for (let y = 0; y < shape.height; y += 1) {
+      for (let x = 0; x < shape.width; x += 1) {
+        if (!isOccupiedCell(shape.cells[y][x])) continue
+        const worldCellX = item.x + x
+        const worldCellY = item.y + y
+        minX = Math.min(minX, worldCellX)
+        minY = Math.min(minY, worldCellY)
+        maxX = Math.max(maxX, worldCellX + 1)
+        maxY = Math.max(maxY, worldCellY + 1)
+      }
+    }
   }
 
   if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null
@@ -238,12 +311,14 @@ export default function App() {
   const maxPlacedCol = placed.reduce((maxCol, item) => {
     const tile = tilesById[item.tileId]
     if (!tile) return maxCol
-    return Math.max(maxCol, item.x + tile.width)
+    const shape = getTileShape(tile, item.rotation ?? 0)
+    return Math.max(maxCol, item.x + shape.width)
   }, 0)
   const maxPlacedRow = placed.reduce((maxRow, item) => {
     const tile = tilesById[item.tileId]
     if (!tile) return maxRow
-    return Math.max(maxRow, item.y + tile.height)
+    const shape = getTileShape(tile, item.rotation ?? 0)
+    return Math.max(maxRow, item.y + shape.height)
   }, 0)
   const contentCols = Math.max(GRID_COLS, viewportCols, maxPlacedCol + 2)
   const contentRows = Math.max(GRID_ROWS, viewportRows, maxPlacedRow + 2)
@@ -281,6 +356,7 @@ export default function App() {
 
   const updateDragPreview = (
     tileId: string,
+    rotation: number,
     source: DragSource,
     placedId: string | undefined,
     _over: DragMoveEvent['over'] | DragEndEvent['over'],
@@ -297,13 +373,15 @@ export default function App() {
       setDragPreview(null)
       return null
     }
+    const shape = getTileShape(tile, rotation)
 
     const snapped = getSnappedGridCell(
       translatedRect,
       canvas.getBoundingClientRect(),
       canvas.scrollLeft,
       canvas.scrollTop,
-      tile,
+      shape.width,
+      shape.height,
       zoom,
       contentCols,
       contentRows,
@@ -315,11 +393,13 @@ export default function App() {
 
     const nextPreview = {
       tileId,
+      rotation,
       x: snapped.x,
       y: snapped.y,
       valid: canPlaceAt(
         placed,
         tile,
+        rotation,
         snapped.x,
         snapped.y,
         source === 'placed' ? placedId : undefined,
@@ -333,9 +413,12 @@ export default function App() {
     const tileId = event.active.data.current?.tileId as string | undefined
     const source = event.active.data.current?.source as DragSource | undefined
     const placedId = event.active.data.current?.placedId as string | undefined
+    const rotation = normalizeRotation(
+      (event.active.data.current?.rotation as number | undefined) ?? 0,
+    )
     if (!tileId || !source) return
 
-    setActiveDrag({ tileId, source, placedId })
+    setActiveDrag({ tileId, rotation, source, placedId })
     if (source === 'placed' && placedId) {
       setSelectedPlacedId(placedId)
     }
@@ -345,6 +428,7 @@ export default function App() {
     if (!activeDrag) return
     updateDragPreview(
       activeDrag.tileId,
+      activeDrag.rotation,
       activeDrag.source,
       activeDrag.placedId,
       event.over,
@@ -360,6 +444,10 @@ export default function App() {
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event
     const tileId = activeDrag?.tileId ?? (active.data.current?.tileId as string | undefined)
+    const rotation = normalizeRotation(
+      activeDrag?.rotation ??
+        ((active.data.current?.rotation as number | undefined) ?? 0),
+    )
     if (!tileId) {
       setActiveDrag(null)
       setDragPreview(null)
@@ -377,6 +465,7 @@ export default function App() {
       dragPreview ??
       updateDragPreview(
         tileId,
+        rotation,
         activeDrag?.source ?? 'sidebar',
         activeDrag?.placedId,
         over,
@@ -392,6 +481,7 @@ export default function App() {
             preview.y,
             placed,
             tile,
+            rotation,
             contentCols,
             contentRows,
             ignorePlacedId,
@@ -412,6 +502,7 @@ export default function App() {
             {
               id: `${tileId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
               tileId,
+              rotation,
               x: resolvedCell.x,
               y: resolvedCell.y,
             },
@@ -526,14 +617,62 @@ export default function App() {
     if (!selectedPlacedId) return
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Backspace') return
-      setPlaced((prev) => prev.filter((tile) => tile.id !== selectedPlacedId))
-      setSelectedPlacedId(null)
+      if (event.key === 'Backspace') {
+        setPlaced((prev) => prev.filter((tile) => tile.id !== selectedPlacedId))
+        setSelectedPlacedId(null)
+        return
+      }
+
+      if (event.code !== 'Space') return
+      event.preventDefault()
+
+      setPlaced((prev) => {
+        const current = prev.find((tile) => tile.id === selectedPlacedId)
+        if (!current) return prev
+        const tileDef = tilesById[current.tileId]
+        if (!tileDef) return prev
+
+        const nextRotation = normalizeRotation((current.rotation ?? 0) + 90)
+        const nextShape = getTileShape(tileDef, nextRotation)
+        const clampedX = Math.max(0, Math.min(contentCols - nextShape.width, current.x))
+        const clampedY = Math.max(0, Math.min(contentRows - nextShape.height, current.y))
+
+        let target = { x: clampedX, y: clampedY }
+        if (
+          !canPlaceAt(
+            prev,
+            tileDef,
+            nextRotation,
+            target.x,
+            target.y,
+            current.id,
+          )
+        ) {
+          const fallback = findNearestAvailableCell(
+            target.x,
+            target.y,
+            prev,
+            tileDef,
+            nextRotation,
+            contentCols,
+            contentRows,
+            current.id,
+          )
+          if (!fallback) return prev
+          target = fallback
+        }
+
+        return prev.map((item) =>
+          item.id === current.id
+            ? { ...item, rotation: nextRotation, x: target.x, y: target.y }
+            : item,
+        )
+      })
     }
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedPlacedId])
+  }, [contentCols, contentRows, selectedPlacedId])
 
   useEffect(() => {
     const search = new URLSearchParams(window.location.search)
@@ -739,6 +878,7 @@ export default function App() {
                   {dragPreview && (() => {
                     const tile = tilesById[dragPreview.tileId]
                     if (!tile) return null
+                    const shape = getTileShape(tile, dragPreview.rotation)
                     return (
                       <div
                         className={`landing-preview ${dragPreview.valid ? '' : 'landing-preview-blocked'}`.trim()}
@@ -746,9 +886,9 @@ export default function App() {
                           position: 'absolute',
                           left: dragPreview.x * CELL_SIZE_PX,
                           top: dragPreview.y * CELL_SIZE_PX,
-                          width: tile.width * CELL_SIZE_PX,
-                          height: tile.height * CELL_SIZE_PX,
-                          background: tile.color,
+                          width: shape.width * CELL_SIZE_PX,
+                          height: shape.height * CELL_SIZE_PX,
+                        background: tile.tint,
                         }}
                       />
                     )
@@ -758,6 +898,7 @@ export default function App() {
                       key={p.id}
                       placedId={p.id}
                       tileId={p.tileId}
+                      rotation={p.rotation ?? 0}
                       x={p.x}
                       y={p.y}
                       selected={selectedPlacedId === p.id}
@@ -774,13 +915,17 @@ export default function App() {
         {activeDrag && (() => {
           const tile = tilesById[activeDrag.tileId]
           if (!tile) return null
+          const shape = getTileShape(tile, activeDrag.rotation)
           return (
-            <div
+            <TileSprite
+              tile={tile}
+              rotation={activeDrag.rotation}
+              cellSize={CELL_SIZE_PX * zoom}
               className="drag-overlay-tile"
               style={{
-                width: tile.width * CELL_SIZE_PX * zoom,
-                height: tile.height * CELL_SIZE_PX * zoom,
-                background: tile.color,
+                width: shape.width * CELL_SIZE_PX * zoom,
+                height: shape.height * CELL_SIZE_PX * zoom,
+                opacity: 0.75,
               }}
             />
           )

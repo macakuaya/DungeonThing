@@ -1,4 +1,10 @@
-export type Placed = { id: string; tileId: string; x: number; y: number }
+export type Placed = {
+  id: string
+  tileId: string
+  x: number
+  y: number
+  rotation?: number
+}
 
 export type SharePayload = {
   v: 1
@@ -46,7 +52,8 @@ function isValidPlaced(value: unknown): value is Placed {
     typeof item.id === 'string' &&
     typeof item.tileId === 'string' &&
     Number.isInteger(item.x) &&
-    Number.isInteger(item.y)
+    Number.isInteger(item.y) &&
+    (item.rotation === undefined || Number.isInteger(item.rotation))
   )
 }
 

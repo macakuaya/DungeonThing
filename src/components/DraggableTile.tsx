@@ -1,5 +1,6 @@
 import { useDraggable } from '@dnd-kit/core'
-import { CELL_SIZE_PX, type TileDef } from '../tiles'
+import { type TileDef } from '../tiles'
+import { TileSprite } from './TileSprite'
 
 type DraggableTileProps = {
   tile: TileDef
@@ -16,9 +17,6 @@ export function DraggableTile({ tile }: DraggableTileProps) {
       ref={setNodeRef}
       className="draggable-tile"
       style={{
-        width: tile.width * CELL_SIZE_PX,
-        height: tile.height * CELL_SIZE_PX,
-        background: tile.color,
         opacity: isDragging ? 0.35 : 1,
         cursor: 'grab',
       }}
@@ -27,6 +25,7 @@ export function DraggableTile({ tile }: DraggableTileProps) {
       aria-label={`Drag ${tile.label} tile`}
       title={tile.label}
     >
+      <TileSprite tile={tile} cellSize={12} className="draggable-tile-sprite" />
       <span className="tile-label">
         {tile.label} ({tile.width}x{tile.height})
       </span>
