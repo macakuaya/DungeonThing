@@ -31,12 +31,6 @@ jobs:
         working-directory: source
         run: npm ci
 
-      # #region agent log
-      - name: Debug log pre-build state
-        run: |
-          node -e "fetch('http://127.0.0.1:7933/ingest/b221d707-f9b4-420b-a614-5a214cad947c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9f999'},body:JSON.stringify({sessionId:'e9f999',runId:process.env.GITHUB_RUN_ID,hypothesisId:'H2',location:'.github/workflows/deploy.yml:build',message:'Workflow reached pre-build step',data:{ref:process.env.GITHUB_REF,sha:process.env.GITHUB_SHA},timestamp:Date.now()})}).catch(()=>{})"
-      # #endregion
-
       - name: Build
         working-directory: source
         run: npm run build
@@ -45,12 +39,6 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_SHARE_CARD_URL: ${{ secrets.VITE_SHARE_CARD_URL }}
           VITE_PUBLIC_APP_URL: ${{ secrets.VITE_PUBLIC_APP_URL }}
-
-      # #region agent log
-      - name: Debug log pre-gh-pages publish
-        run: |
-          node -e "fetch('http://127.0.0.1:7933/ingest/b221d707-f9b4-420b-a614-5a214cad947c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9f999'},body:JSON.stringify({sessionId:'e9f999',runId:process.env.GITHUB_RUN_ID,hypothesisId:'H5',location:'.github/workflows/deploy.yml:deploy',message:'Workflow reached gh-pages publish boundary',data:{publishBranch:'gh-pages',publishDir:'dist'},timestamp:Date.now()})}).catch(()=>{})"
-      # #endregion
 
       - name: Publish to gh-pages branch
         env:
