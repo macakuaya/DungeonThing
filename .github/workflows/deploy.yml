@@ -6,16 +6,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
-  group: pages
+  group: gh-pages-deploy
   cancel-in-progress: true
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -30,6 +28,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # #region agent log
+      - name: Debug log pre-build state
+        run: |
+          node -e "fetch('http://127.0.0.1:7933/ingest/b221d707-f9b4-420b-a614-5a214cad947c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9f999'},body:JSON.stringify({sessionId:'e9f999',runId:process.env.GITHUB_RUN_ID,hypothesisId:'H2',location:'.github/workflows/deploy.yml:build',message:'Workflow reached pre-build step',data:{ref:process.env.GITHUB_REF,sha:process.env.GITHUB_SHA},timestamp:Date.now()})}).catch(()=>{})"
+      # #endregion
+
       - name: Build
         run: npm run build
         env:
@@ -38,18 +42,16 @@ jobs:
           VITE_SHARE_CARD_URL: ${{ secrets.VITE_SHARE_CARD_URL }}
           VITE_PUBLIC_APP_URL: ${{ secrets.VITE_PUBLIC_APP_URL }}
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
+      # #region agent log
+      - name: Debug log pre-gh-pages publish
+        run: |
+          node -e "fetch('http://127.0.0.1:7933/ingest/b221d707-f9b4-420b-a614-5a214cad947c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e9f999'},body:JSON.stringify({sessionId:'e9f999',runId:process.env.GITHUB_RUN_ID,hypothesisId:'H5',location:'.github/workflows/deploy.yml:deploy',message:'Workflow reached gh-pages publish boundary',data:{publishBranch:'gh-pages',publishDir:'dist'},timestamp:Date.now()})}).catch(()=>{})"
+      # #endregion
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          force_orphan: true
