@@ -38,11 +38,6 @@ jobs:
           VITE_SHARE_CARD_URL: ${{ secrets.VITE_SHARE_CARD_URL }}
           VITE_PUBLIC_APP_URL: ${{ secrets.VITE_PUBLIC_APP_URL }}
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v4
-        with:
-          enablement: true
-
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
